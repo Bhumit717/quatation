@@ -76,7 +76,35 @@ const AIDataExtractor = ({ onDataExtracted }: AIDataExtractorProps) => {
     setIsLoading(true);
 
     try {
-      const prompt = `You are an expert at extracting structured quotation data from informal text. 
+      // Split text into chunks if it's very long (approx > 6000 chars)
+      const MAX_CHUNK_SIZE = 6000;
+      const textChunks: string[] = [];
+
+      if (informalText.length <= MAX_CHUNK_SIZE) {
+        textChunks.push(informalText);
+      } else {
+        // Simple chunking by lines to avoid cutting in middle of a sentence
+        const lines = informalText.split('\n');
+        let currentChunk = "";
+        for (const line of lines) {
+          if ((currentChunk.length + line.length) > MAX_CHUNK_SIZE) {
+            textChunks.push(currentChunk);
+            currentChunk = line + "\n";
+          } else {
+            currentChunk += line + "\n";
+          }
+        }
+        if (currentChunk.trim()) textChunks.push(currentChunk);
+      }
+
+      const allExtractedData: ExtractedData[] = [];
+
+      for (let i = 0; i < textChunks.length; i++) {
+        const chunk = textChunks[i];
+        const isLastChunk = i === textChunks.length - 1;
+
+        const prompt = `You are an expert at extracting structured quotation data from informal text. 
+${textChunks.length > 1 ? `This is part ${i + 1} of ${textChunks.length} of a long text.` : ""}
 
 Analyze the following text and extract any quotation-related information. Return ONLY a valid JSON object with the following structure (include only fields that have data):
 
@@ -101,8 +129,8 @@ Analyze the following text and extract any quotation-related information. Return
   "portDetails": "shipping port details if mentioned",
   "extraDetails": "any extra terms, conditions, or notes",
   "advancePayment": 70,
-  "showTotalValue": true/false (if user explicitly says to hide or not show total),
-  "action": "append or replace (default replace)",
+  "showTotalValue": true (default),
+  "action": "append",
   "columnHeaders": {
     "items": "Label for items column",
     "dia": "Label for diameter column",
@@ -111,99 +139,132 @@ Analyze the following text and extract any quotation-related information. Return
 }
 
 Important rules:
-- Extract ALL items mentioned, even if they have partial information
-- If the text implies adding to existing data (e.g. "add", "also", "plus"), set "action" to "append". If it implies starting fresh or complete update, use "replace".
-- If the user specifically asks to rename a column or label, include it in "columnHeaders"
+- Extract ALL items mentioned in THIS CHUNK
+- Set "action" to "append"
 - Keep the response extremely brief. Return ONLY the JSON object. Do not explain anything.
-- If the text is very long, focus on the core quotation details.
 - For prices, extract numeric values only
 - For quantities, keep as string (e.g., "100", "50 pcs")
 - Calculate totalAmount if price and quantity are available and total is not mentioned
 - If a field is not mentioned, omit it from the response
 - Return ONLY the JSON object, no explanation or markdown
 
-Text to analyze:
-${informalText}
+Text to analyze (Part ${i + 1}):
+${chunk}
 
-Context: If "action" is "append", new items will be added to the current list. If "replace", all existing items will be cleared first. If unsure, use "append" if "add" or "also" is in the text.`;
+Context: Return ONLY the raw JSON object.`;
 
-      let response;
-      let usedFallback = false;
+        let response;
+        let usedFallback = false;
 
-      try {
-        response = await fetch("https://api.sambanova.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${SAMBANOVA_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "Meta-Llama-3.3-70B-Instruct",
-            temperature: 0.1,
-            messages: [
-              {
-                role: "user",
-                content: prompt,
-              },
-            ],
-          }),
-        });
+        try {
+          response = await fetch("https://api.sambanova.ai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${SAMBANOVA_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "Meta-Llama-3.3-70B-Instruct",
+              temperature: 0.1,
+              messages: [{ role: "user", content: prompt }],
+            }),
+          });
+
+          if (!response.ok) throw new Error(`SambaNova Error: ${response.status}`);
+        } catch (err) {
+          console.warn("SambaNova failed, trying Sarvam AI fallback...", err);
+          usedFallback = true;
+          response = await fetch("https://api.sarvam.ai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "api-subscription-key": SARVAM_API_KEY,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "sarvam-m",
+              temperature: 0.1,
+              messages: [{ role: "user", content: prompt }],
+            }),
+          });
+        }
 
         if (!response.ok) {
-          throw new Error(`SambaNova Error: ${response.status}`);
+          const errorText = await response.text();
+          throw new Error(`AI Service Error (${response.status}): ${errorText || 'Unknown error'}`);
         }
-      } catch (err) {
-        console.warn("SambaNova failed or limit reached, trying Sarvam AI fallback...", err);
-        usedFallback = true;
-        response = await fetch("https://api.sarvam.ai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "api-subscription-key": SARVAM_API_KEY, // Sarvam often uses this header or Authorization
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "sarvam-m",
-            temperature: 0.1,
-            messages: [
-              {
-                role: "user",
-                content: prompt,
-              },
-            ],
-          }),
-        });
+
+        const data = await response.json();
+        const responseText = data.choices?.[0]?.message?.content;
+
+        if (!responseText) throw new Error("No response from AI");
+
+        const jsonStart = responseText.indexOf('{');
+        const jsonEnd = responseText.lastIndexOf('}');
+
+        if (jsonStart !== -1 && jsonEnd !== -1) {
+          const cleanedResponse = responseText.substring(jsonStart, jsonEnd + 1).trim();
+          try {
+            const parsed = JSON.parse(cleanedResponse);
+            allExtractedData.push(parsed);
+          } catch (e) {
+            console.error("JSON parse error for chunk", i, e);
+          }
+        }
       }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("API Error:", response.status, errorText);
-        throw new Error(`AI Service Error (${response.status}): ${errorText || 'Unknown error'}`);
+      if (allExtractedData.length === 0) {
+        throw new Error("Could not extract any data from the text.");
       }
 
-      const data = await response.json();
-      const responseText = data.choices?.[0]?.message?.content;
+      // Merge results
+      const mergedData: ExtractedData = {
+        customerDetails: {},
+        items: [],
+        portDetails: "",
+        extraDetails: "",
+        advancePayment: 70,
+        showTotalValue: true,
+        action: 'append',
+        columnHeaders: {}
+      };
 
-      if (!responseText) {
-        throw new Error("No response from AI");
-      }
+      allExtractedData.forEach((data, index) => {
+        // Customer details - take first non-empty or most complete
+        if (data.customerDetails) {
+          mergedData.customerDetails = {
+            ...mergedData.customerDetails,
+            ...Object.fromEntries(Object.entries(data.customerDetails).filter(([_, v]) => v))
+          };
+        }
 
-      // Find the first { and the last } in the response to extract JSON
-      // This is more robust than simple trimming if the AI adds text before/after
-      const jsonStart = responseText.indexOf('{');
-      const jsonEnd = responseText.lastIndexOf('}');
+        // Items - collect all
+        if (data.items && Array.isArray(data.items)) {
+          mergedData.items = [...(mergedData.items || []), ...data.items];
+        }
 
-      if (jsonStart === -1 || jsonEnd === -1) {
-        throw new Error("AI response did not contain a valid JSON object");
-      }
+        // Port & Extra - append
+        if (data.portDetails) mergedData.portDetails = (mergedData.portDetails ? mergedData.portDetails + " " : "") + data.portDetails;
+        if (data.extraDetails) mergedData.extraDetails = (mergedData.extraDetails ? mergedData.extraDetails + "\n" : "") + data.extraDetails;
 
-      let cleanedResponse = responseText.substring(jsonStart, jsonEnd + 1).trim();
+        // Header overrides
+        if (data.columnHeaders) {
+          mergedData.columnHeaders = { ...mergedData.columnHeaders, ...data.columnHeaders };
+        }
 
-      const extractedData: ExtractedData = JSON.parse(cleanedResponse);
+        // Action - use the first chunk's preference if it exists, but default to replace if explicitly stated in text
+        if (index === 0 && data.action) mergedData.action = data.action;
+      });
 
-      onDataExtracted(extractedData);
+      // Final cleanup of merged data
+      if (!mergedData.items?.length) delete mergedData.items;
+      if (!Object.keys(mergedData.customerDetails || {}).length) delete mergedData.customerDetails;
+      if (!mergedData.portDetails) delete mergedData.portDetails;
+      if (!mergedData.extraDetails) delete mergedData.extraDetails;
+
+      onDataExtracted(mergedData);
 
       toast({
-        title: "Data Extracted Successfully!",
+        title: textChunks.length > 1 ? `Processed ${textChunks.length} chunks successfully!` : "Data Extracted Successfully!",
         description: "The quotation fields have been auto-filled from your text.",
       });
 

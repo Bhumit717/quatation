@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Minus, FileDown, Upload, Save, History } from "lucide-react";
+import { Plus, Minus, FileDown, Upload, Save, History, Copy } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import jsPDF from 'jspdf';
 import { useToast } from "@/hooks/use-toast";
@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import AIDataExtractor from "./AIDataExtractor";
 import qrCodeImage from "@/assets/qr-code.jpeg";
+import signatureImg from "@/assets/signature.png";
 
 interface QuotationItem {
   id: string;
@@ -56,6 +57,7 @@ const QuotationGenerator = () => {
 
   const logoInputRef = useRef<HTMLInputElement>(null);
   const qrInputRef = useRef<HTMLInputElement>(null);
+  const signatureInputRef = useRef<HTMLInputElement>(null);
 
   const [companyDetails, setCompanyDetails] = useState<CompanyDetails>({
     name: "PATEL IMPEX",
@@ -88,6 +90,7 @@ const QuotationGenerator = () => {
   ]);
 
   const [qrCode, setQrCode] = useState(qrCodeImage);
+  const [signature, setSignature] = useState(signatureImg);
   const [themeColors, setThemeColors] = useState<ThemeColors>({
     headerBg: "hsl(210, 10%, 24%)",
     headerText: "#ffffff",
@@ -273,6 +276,7 @@ const QuotationGenerator = () => {
       customerDetails,
       items,
       qrCode,
+      signature,
       themeColors,
       columnHeaders,
       portDetails,
@@ -354,6 +358,17 @@ const QuotationGenerator = () => {
       const reader = new FileReader();
       reader.onload = (e) => {
         setQrCode(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSignatureUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setSignature(e.target?.result as string);
       };
       reader.readAsDataURL(file);
     }
@@ -753,17 +768,13 @@ const QuotationGenerator = () => {
         y += extraH;
       }
 
-      // Bottom section with logo and QR
+      // Bottom section with signature
       y += 10;
       try {
-        const logoData = await getCircularLogoSnapshot(companyDetails.logo);
-        if (logoData) {
-          pdf.addImage(logoData, 'PNG', margin + 2, y, 12, 12);
+        const signatureData = await loadImageAsDataURL(signature);
+        if (signatureData) {
+          pdf.addImage(signatureData, 'PNG', margin + 2, y, 40, 15); // Adjust size as needed
         }
-      } catch { }
-      try {
-        const qrData = await loadImageAsDataURL(qrCode);
-        if (qrData) pdf.addImage(qrData, 'JPEG', pageWidth - margin - 18, y, 16, 16);
       } catch { }
 
       // Outer frame
@@ -1192,7 +1203,7 @@ const QuotationGenerator = () => {
         }
       }
 
-      // Bottom Logo and QR Code
+      // Bottom Signature
       currentRow++; // Spacer row
       currentRow++; // Image row
 
@@ -1210,34 +1221,17 @@ const QuotationGenerator = () => {
       }
 
       try {
-        const logoData = await getCircularLogoSnapshot(companyDetails.logo);
-        if (logoData) {
-          const base64Data = logoData.split(',')[1];
-          const logoImageId = workbook.addImage({
-            base64: base64Data,
-            extension: 'png',
-          });
-          worksheet.addImage(logoImageId, {
-            tl: { col: 0.2, row: currentRow - 1 + 0.2 },
-            ext: { width: 70, height: 70 }
-          });
-        }
-      } catch (error) {
-        console.error('Error adding bottom logo:', error);
-      }
-
-      try {
-        const qrBuffer = await getImageBuffer(qrCode);
-        const qrImageId = workbook.addImage({
-          buffer: qrBuffer,
+        const signatureBuffer = await getImageBuffer(signature);
+        const signatureImageId = workbook.addImage({
+          buffer: signatureBuffer,
           extension: 'png',
         });
-        worksheet.addImage(qrImageId, {
-          tl: { col: colCount - 1 + 0.2, row: currentRow - 1 + 0.2 },
-          ext: { width: 70, height: 70 }
+        worksheet.addImage(signatureImageId, {
+          tl: { col: 0.2, row: currentRow - 1 + 0.2 },
+          ext: { width: 150, height: 60 } // Signature width/height
         });
       } catch (error) {
-        console.error('Error adding bottom QR code:', error);
+        console.error('Error adding signature to Excel:', error);
       }
 
       const endRow = currentRow;
@@ -1299,6 +1293,154 @@ const QuotationGenerator = () => {
       toast({
         title: "Error generating Excel",
         description: "Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const copyAsHTML = async () => {
+    try {
+      // Determine which columns to show, same as PDF logic
+      const hasDiameters = items.some(item => item.diameter.trim());
+      const hasLengths = items.some(item => item.length.trim());
+      const hasWeights = items.some(item => item.weight.trim());
+
+      const cols = [
+        { label: columnHeaders.sno, key: 'sno' },
+        { label: columnHeaders.items, key: 'items' }
+      ];
+      if (hasDiameters) cols.push({ label: columnHeaders.dia, key: 'dia' });
+      if (hasLengths) cols.push({ label: columnHeaders.length, key: 'len' });
+      if (hasWeights) cols.push({ label: columnHeaders.weight, key: 'wgt' });
+      cols.push({ label: columnHeaders.price, key: 'price' });
+      cols.push({ label: columnHeaders.qty, key: 'qty' });
+      cols.push({ label: columnHeaders.total, key: 'total' });
+
+      // Get logo and QR data
+      const logoData = companyDetails.logo ? await getCircularLogoSnapshot(companyDetails.logo) : null;
+      const qrData = qrCode || null;
+
+      const htmlOutput = `
+<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; border: 4px solid #000; padding: 15px; background-color: #ffffff; color: #000;">
+  <!-- Header Label -->
+  <div style="background-color: ${themeColors.headerBg}; color: ${themeColors.headerText}; text-align: center; padding: 10px; font-weight: bold; font-size: 20px; border: 1px solid #000; margin-bottom: 0;">
+    ${columnHeaders.quotationLabel || 'QUOTATION'}
+  </div>
+  
+  <!-- Company Info Table -->
+  <table style="width: 100%; border-collapse: collapse; border: 1px solid #000; margin-bottom: 15px;">
+    <tr>
+      <td style="padding: 10px; border-right: 1px solid #000; width: 80px; text-align: center; vertical-align: middle;">
+        ${logoData ? `<img src="${logoData}" alt="Logo" style="width: 60px; height: 60px; border-radius: 50%; display: block; margin: 0 auto;" />` : ''}
+      </td>
+      <td style="padding: 10px; text-align: left; vertical-align: top;">
+        <div style="font-weight: bold; font-size: 18px; margin-bottom: 5px;">${companyDetails.name}</div>
+        <div style="font-size: 11px; line-height: 1.4; color: #000;">
+          <strong>${columnHeaders.addressLabel}</strong> ${companyDetails.address}<br/>
+          <strong>${columnHeaders.phoneLabel}</strong> ${companyDetails.phone}<br/>
+          <strong>${columnHeaders.emailLabel}</strong> ${companyDetails.email} | <strong>${columnHeaders.websiteLabel}</strong> ${companyDetails.website}
+        </div>
+      </td>
+      <td style="width: 100px; text-align: center; vertical-align: top; border-left: 1px solid #000; padding: 0;">
+        <div style="background-color: ${themeColors.headerBg}; color: ${themeColors.headerText}; padding: 6px; font-weight: bold; font-size: 11px; border-bottom: 1px solid #000;">
+          ${columnHeaders.dateLabel || 'DATE'}
+        </div>
+        <div style="padding: 8px; font-weight: bold; font-size: 12px; border-bottom: 1px solid #000;">
+          ${date}
+        </div>
+        <div style="padding: 5px; height: 50px; display: flex; align-items: center; justify-content: center;">
+          ${qrData ? `<img src="${qrData}" alt="QR" style="height: 45px; width: 45px; display: block; margin: 0 auto;" />` : ''}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Customer Section -->
+  <div style="border: 1px solid #000; padding: 10px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 14px; background-color: #f8f9fa;">
+    ${columnHeaders.customerLabel || 'CUSTOMER'}: ${customerDetails.name || 'CUSTOMER'}
+  </div>
+
+  <!-- Items Table -->
+  <table style="width: 100%; border-collapse: collapse; border: 1px solid #000; margin-bottom: 15px;">
+    <thead>
+      <tr style="background-color: ${themeColors.headerBg}; color: ${themeColors.headerText}; font-size: 11px;">
+        ${cols.map(col => `<th style="border: 1px solid #000; padding: 8px; text-align: ${col.key === 'items' ? 'left' : 'center'};">${col.label}</th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>
+      ${items.map((item, index) => `
+        <tr style="font-size: 11px;">
+          <td style="border: 1px solid #000; padding: 8px; text-align: center;">${index + 1}</td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: left;">${item.description || 'Copper Bond Grounding Rod'}</td>
+          ${hasDiameters ? `<td style="border: 1px solid #000; padding: 8px; text-align: center;">${item.diameter || '-'}</td>` : ''}
+          ${hasLengths ? `<td style="border: 1px solid #000; padding: 8px; text-align: center;">${item.length || '-'}</td>` : ''}
+          ${hasWeights ? `<td style="border: 1px solid #000; padding: 8px; text-align: center;">${item.weight || '-'}</td>` : ''}
+          <td style="border: 1px solid #000; padding: 8px; text-align: center;">${item.perPiecePrice > 0 ? item.perPiecePrice + ' USD' : '-'}</td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center;">${item.quantity || '-'}</td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold; color: #dc2626;">${item.totalAmount > 0 ? item.totalAmount.toFixed(0) + ' USD' : '-'}</td>
+        </tr>
+      `).join('')}
+      
+      <!-- Total Line -->
+      ${showTotalValue && getTotalValue() > 0 ? `
+        <tr style="background-color: #eeeeee; font-weight: bold; font-size: 12px;">
+          <td colspan="${cols.length - 1}" style="border: 1px solid #000; padding: 10px; text-align: right;">${columnHeaders.totalValue || 'Total Content Value'}</td>
+          <td style="border: 1px solid #000; padding: 10px; text-align: center; color: #dc2626;">${(totalValueOverride !== null ? totalValueOverride : getTotalValue()).toFixed(0)} USD</td>
+        </tr>
+      ` : ''}
+    </tbody>
+  </table>
+
+  <!-- Additional Info -->
+  <div style="font-size: 12px;">
+    ${portDetails.trim() ? `
+      <div style="border: 1px solid #000; padding: 8px; text-align: center; margin-bottom: 5px; background-color: #ffffff;">
+        <strong>${columnHeaders.port || 'PORT'}:</strong> ${portDetails}
+      </div>
+    ` : ''}
+    
+    ${(advancePayment > 0 || advanceAmountOverride !== null) && (showAdvancePercentage || showAdvanceValue) ? `
+      <div style="border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold; color: #dc2626; margin-bottom: 5px; background-color: #ffffff;">
+        ${columnHeaders.advance || 'ADVANCE'}${(showAdvancePercentage && advancePayment > 0) ? ` (${advancePayment}%)` : ''}: ${getAdvanceAmount().toFixed(0)} USD
+      </div>
+    ` : ''}
+    
+    ${extraDetails.trim() ? `
+      <div style="border: 1px solid #000; padding: 10px; text-align: left; background-color: #fcfcfc;">
+        <strong style="text-decoration: underline; margin-bottom: 5px; display: block;">${columnHeaders.extra || 'Extra Details'}:</strong>
+        <div style="white-space: pre-wrap; line-height: 1.5;">${extraDetails}</div>
+      </div>
+    ` : ''}
+  </div>
+
+    <!-- Footer Section with Signature -->
+    <div style="margin-top: 25px; border-top: 1px solid #ccc; padding-top: 15px; display: flex; align-items: center; justify-content: flex-start;">
+      ${signature ? `<img src="${signature}" alt="Signature" style="max-height: 50px; width: auto;" />` : ''}
+    </div>
+  </div>
+</div>
+      `;
+
+      // Copy as HTML
+      const type = "text/html";
+      const plainText = htmlOutput.replace(/<[^>]*>/g, '').trim();
+      const blob = new Blob([htmlOutput], { type });
+      const data = [new ClipboardItem({
+        [type]: blob,
+        ["text/plain"]: new Blob([plainText], { type: "text/plain" })
+      })];
+
+      await navigator.clipboard.write(data);
+
+      toast({
+        title: "Copied for Email!",
+        description: "Quotation table (matching PDF) has been copied. Paste directly into your email.",
+      });
+    } catch (err) {
+      console.error('Failed to copy HTML: ', err);
+      toast({
+        title: "Copy Failed",
+        description: "Your browser might not support copying HTML. Please use PDF download instead.",
         variant: "destructive"
       });
     }
@@ -1705,26 +1847,26 @@ const QuotationGenerator = () => {
                 </div>
               </div>
               <div>
-                <Label>QR Code</Label>
+                <Label>Signature</Label>
                 <div className="space-y-2">
                   <Button
                     variant="outline"
-                    onClick={() => qrInputRef.current?.click()}
+                    onClick={() => signatureInputRef.current?.click()}
                     className="w-full justify-start"
                   >
                     <Upload className="h-4 w-4 mr-2" />
-                    Upload QR Code
+                    Upload Signature
                   </Button>
                   <input
-                    ref={qrInputRef}
+                    ref={signatureInputRef}
                     type="file"
                     accept="image/*"
-                    onChange={handleQrUpload}
+                    onChange={handleSignatureUpload}
                     className="hidden"
                   />
-                  {qrCode && (
+                  {signature && (
                     <div className="border border-input rounded p-2">
-                      <img src={qrCode} alt="QR Code" className="h-12 object-contain" />
+                      <img src={signature} alt="Signature" className="h-12 object-contain" />
                     </div>
                   )}
                 </div>
@@ -1934,16 +2076,11 @@ const QuotationGenerator = () => {
                 )}
               </div>
 
-              {/* Bottom Logo Section */}
-              <div className="mt-8 pt-4 border-t border-gray-300 flex justify-between items-center min-h-20">
-                <div className="w-10 h-10 rounded-full overflow-hidden border border-gray-300">
-                  <img src={companyDetails.logo} alt="Logo" className="w-full h-full object-cover" />
-                </div>
-                <div>
-                  {qrCode && (
-                    <img src={qrCode} alt="QR Code" className="h-16 object-contain" />
-                  )}
-                </div>
+              {/* Bottom Signature Section */}
+              <div className="mt-8 pt-4 border-t border-gray-300 flex justify-start items-center min-h-20">
+                {signature && (
+                  <img src={signature} alt="Signature" className="h-16 object-contain" />
+                )}
               </div>
             </div>
           </CardContent>
@@ -1970,6 +2107,10 @@ const QuotationGenerator = () => {
                 View History
               </Button>
             </Link>
+            <Button onClick={copyAsHTML} variant="outline" className="border-accent text-accent hover:bg-accent hover:text-accent-foreground">
+              <Copy className="h-5 w-5 mr-2" />
+              Copy for Email
+            </Button>
             <Button onClick={generatePDF} className="bg-accent hover:bg-accent/90 text-accent-foreground">
               <FileDown className="h-5 w-5 mr-2" />
               Download PDF
