@@ -607,7 +607,7 @@ const QuotationGenerator = () => {
       };
 
       // --- QUOTATION HEADER ---
-      drawCell(margin, y, contentWidth, 10, columnHeaders.quotationLabel || 'QUOTATION', {
+      drawCell(margin, y, contentWidth, 10, `${columnHeaders.quotationLabel || 'QUOTATION'} ${quotationNumber ? '#' + quotationNumber : ''}`, {
         fillColor: headerBg, textColor: headerText, bold: true, fontSize: 16, align: 'center'
       });
       y += 10;
@@ -659,10 +659,23 @@ const QuotationGenerator = () => {
       y += 4;
 
       // --- CUSTOMER SECTION ---
-      drawCell(margin, y, contentWidth, 9, `${columnHeaders.customerLabel}: ${customerDetails.name}`, {
-        bold: true, fontSize: 11, align: 'center'
+      let customerInfo = `${columnHeaders.customerLabel}: ${customerDetails.name}`;
+      if (customerDetails.address) customerInfo += `\n${columnHeaders.addressLabel} ${customerDetails.address}`;
+      
+      const phoneEmail = [
+        customerDetails.phone ? `${columnHeaders.phoneLabel} ${customerDetails.phone}` : '',
+        customerDetails.email ? `${columnHeaders.emailLabel} ${customerDetails.email}` : ''
+      ].filter(Boolean).join('  |  ');
+      
+      if (phoneEmail) customerInfo += `\n${phoneEmail}`;
+
+      const customerLines = pdf.splitTextToSize(customerInfo, contentWidth - 4);
+      const customerH = Math.max(9, customerLines.length * 5 + 4);
+
+      drawCell(margin, y, contentWidth, customerH, customerInfo, {
+        bold: true, fontSize: 10, align: 'center', fillColor: [248, 249, 250]
       });
-      y += 13;
+      y += customerH + 5;
 
       // --- ITEMS TABLE ---
       const hasDescriptions = items.some(item => item.description.trim());
@@ -902,7 +915,7 @@ const QuotationGenerator = () => {
       const headerRow = worksheet.getRow(currentRow);
       headerRow.height = 28;
       const headerCell = headerRow.getCell(1);
-      headerCell.value = 'QUOTATION';
+      headerCell.value = `${columnHeaders.quotationLabel} ${quotationNumber ? '#' + quotationNumber : ''}`;
       headerCell.font = { bold: true, size: 18, color: { argb: headerTextColor } };
       headerCell.fill = {
         type: 'pattern',
@@ -1027,11 +1040,21 @@ const QuotationGenerator = () => {
       currentRow++;
 
       // Customer section
+      const customerInfoLines = [
+        `${columnHeaders.customerLabel}: ${customerDetails.name}`,
+        customerDetails.address && `${columnHeaders.addressLabel} ${customerDetails.address}`,
+        [
+          customerDetails.phone && `${columnHeaders.phoneLabel} ${customerDetails.phone}`,
+          customerDetails.email && `${columnHeaders.emailLabel} ${customerDetails.email}`
+        ].filter(Boolean).join('  |  ')
+      ].filter(Boolean);
+
       const customerRow = worksheet.getRow(currentRow);
-      customerRow.height = 22;
-      customerRow.getCell(1).value = `${columnHeaders.customerLabel}: ${customerDetails.name}`;
-      customerRow.getCell(1).font = { bold: true, size: 13 };
-      customerRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      customerRow.height = customerInfoLines.length * 15 + 10;
+      const customerCell = customerRow.getCell(1);
+      customerCell.value = customerInfoLines.join('\n');
+      customerCell.font = { bold: true, size: 12 };
+      customerCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       worksheet.mergeCells(currentRow, 1, currentRow, colCount);
       for (let i = 1; i <= colCount; i++) {
         customerRow.getCell(i).border = thinBorder;
@@ -1324,7 +1347,7 @@ const QuotationGenerator = () => {
 <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; border: 4px solid #000; padding: 15px; background-color: #ffffff; color: #000;">
   <!-- Header Label -->
   <div style="background-color: ${themeColors.headerBg}; color: ${themeColors.headerText}; text-align: center; padding: 10px; font-weight: bold; font-size: 20px; border: 1px solid #000; margin-bottom: 0;">
-    ${columnHeaders.quotationLabel || 'QUOTATION'}
+    ${columnHeaders.quotationLabel || 'QUOTATION'} ${quotationNumber ? '#' + quotationNumber : ''}
   </div>
   
   <!-- Company Info Table -->
@@ -1355,9 +1378,16 @@ const QuotationGenerator = () => {
     </tr>
   </table>
 
-  <!-- Customer Section -->
   <div style="border: 1px solid #000; padding: 10px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 14px; background-color: #f8f9fa;">
-    ${columnHeaders.customerLabel || 'CUSTOMER'}: ${customerDetails.name || 'CUSTOMER'}
+    <div>${columnHeaders.customerLabel || 'CUSTOMER'}: ${customerDetails.name || 'CUSTOMER'}</div>
+    ${customerDetails.address ? `<div style="font-size: 12px; margin-top: 4px;">${columnHeaders.addressLabel} ${customerDetails.address}</div>` : ''}
+    ${(customerDetails.phone || customerDetails.email) ? `
+      <div style="font-size: 12px; margin-top: 4px;">
+        ${customerDetails.phone ? `${columnHeaders.phoneLabel} ${customerDetails.phone}` : ''}
+        ${(customerDetails.phone && customerDetails.email) ? ' | ' : ''}
+        ${customerDetails.email ? `${columnHeaders.emailLabel} ${customerDetails.email}` : ''}
+      </div>
+    ` : ''}
   </div>
 
   <!-- Items Table -->
