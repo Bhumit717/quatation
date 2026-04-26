@@ -94,7 +94,7 @@ const AIDataExtractor = ({ onDataExtracted }: AIDataExtractorProps) => {
         }
         if (currentChunk.trim()) textChunks.push(currentChunk);
       }
-
+      //bhumit
       const allExtractedData: ExtractedData[] = [];
 
       for (let i = 0; i < textChunks.length; i++) {
