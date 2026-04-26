@@ -48,9 +48,7 @@ interface AIDataExtractorProps {
   onDataExtracted: (data: ExtractedData) => void;
 }
 
-const SAMBANOVA_API_KEY = "adf310ad-8712-4b66-8694-2451f68be017";
-const SARVAM_API_KEY = "sk_mi6fifqj_1vThABgSAQN2rbHFTFtUJYrs";
-
+const GEMINI_API_KEY = "AIzaSyAN5z2O5Dnk9Hm7eSAmhg2S55OBACxG8iM";
 const AIDataExtractor = ({ onDataExtracted }: AIDataExtractorProps) => {
   const { toast } = useToast();
   const [informalText, setInformalText] = useState("");
@@ -154,47 +152,33 @@ ${chunk}
 Context: Return ONLY the raw JSON object.`;
 
         let response;
-        let usedFallback = false;
 
         try {
-          response = await fetch("https://api.sambanova.ai/v1/chat/completions", {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
             method: "POST",
             headers: {
-              "Authorization": `Bearer ${SAMBANOVA_API_KEY}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "Meta-Llama-3.3-70B-Instruct",
-              temperature: 0.1,
-              messages: [{ role: "user", content: prompt }],
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.1,
+                responseMimeType: "application/json",
+              }
             }),
           });
 
-          if (!response.ok) throw new Error(`SambaNova Error: ${response.status}`);
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Gemini Error (${response.status}): ${errorText || 'Unknown error'}`);
+          }
         } catch (err) {
-          console.warn("SambaNova failed, trying Sarvam AI fallback...", err);
-          usedFallback = true;
-          response = await fetch("https://api.sarvam.ai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "api-subscription-key": SARVAM_API_KEY,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "sarvam-m",
-              temperature: 0.1,
-              messages: [{ role: "user", content: prompt }],
-            }),
-          });
-        }
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`AI Service Error (${response.status}): ${errorText || 'Unknown error'}`);
+          console.error("Gemini failed", err);
+          throw err;
         }
 
         const data = await response.json();
-        const responseText = data.choices?.[0]?.message?.content;
+        const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!responseText) throw new Error("No response from AI");
 
